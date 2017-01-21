@@ -40,9 +40,11 @@ three lines of code, which wrap the Session object with a debugger wrapper when
 the `--debug` flag is provided:
 
 ```python
-if FLAGS.debug:
-  sess = tf_debug.LocalCLIDebugWrapperSession(sess)
-  sess.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
+# Let your BUILD target depend on "//tensorflow/python/debug:debug_py"
+from tensorflow.python import debug as tf_debug
+
+sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+sess.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
 ```
 
 This wrapper has the same interface as Session, so enabling debugging requires
@@ -105,6 +107,8 @@ running the command `lt` after you executed `run`.) This is called the
 **run-end UI**:
 
 ![tfdbg run-end UI: accuracy](tfdbg_screenshot_run_end_accuracy.png)
+
+### tfdbg CLI Frequently-Used Commands
 
 Try the following commands at the `tfdbg>` prompt (referencing the code at
 `tensorflow/python/debug/examples/debug_mnist.py`):
@@ -260,38 +264,12 @@ stuck. Success!
 
 ## Debugging tf-learn Estimators
 
-In the tutorial above, we described how to use `tfdbg` if you are managing your
-own [`tf.Session`](https://tensorflow.org/api_docs/python/client.html#Session)
-objects. However, many users find
-[`tf.contrib.learn`](https://tensorflow.org/tutorials/tflearn/index.html)
-`Estimator`s to be a convenient higher level API for creating and using models
-in TensorFlow. Part of the convenience is that `Estimator`s manage Sessions
-internally. Fortunately, you can still use `tfdbg` with `Estimator`s by adding a
-special hook.
+For documentation on **tfdbg** to debug
+[tf.contrib.learn](https://tensorflow.org/tutorials/tflearn/index.html)
+`Estimator`s and `Experiment`s, please see
+[How to Use TensorFlow Debugger (tfdbg) with tf.contrib.learn](tfdbg-tflearn.md).
 
-Currently, `tfdbg` can only debug the `fit()` method of tf-learn
-`Estimator`s. Support for debugging `evaluate()` will come soon. To debug
-`Estimator.fit()`, create a monitor and supply it as an argument. For example:
-
-```python
-from tensorflow.python import debug as tf_debug
-
-# Create a local CLI debug hook and use it as a monitor when calling fit().
-classifier.fit(x=training_set.data,
-               y=training_set.target,
-               steps=1000,
-               monitors=[tf_debug.LocalCLIDebugHook()])
-```
-
-For a detailed [example](https://www.tensorflow.org/code/tensorflow/python/debug/examples/debug_tflearn_iris.py) based on
-[tf-learn's iris tutorial](../../../g3doc/tutorials/tflearn/index.md),
-run:
-
-```none
-python $(python -c "import tensorflow as tf; import os; print(os.path.dirname(tf.__file__));")/python/debug/examples/debug_tflearn_iris.py --debug
-```
-
-## Offline Debugging of Remotely-running Sessions
+## Offline Debugging of Remotely-Running Sessions
 
 Oftentimes, your model is running in a remote machine or process that you don't
 have terminal access to. To perform model debugging in such cases, you can use
@@ -328,6 +306,24 @@ python $(python -c "import tensorflow as tf; import os; print(os.path.dirname(tf
     --dump_dir=/cns/is-d/home/somebody/tfdbg_dumps_1
 ```
 
+The `Session` wrapper `DumpingDebugWrapperSession` offers an easier and more
+flexible way to generate dumps on filesystem that can be analyzed offline.
+To use it, simply do:
+
+```python
+# Let your BUILD target depend on "//tensorflow/python/debug:debug_py
+from tensorflow.python.debug import debug_utils
+
+sess = tf_debug.DumpingDebugWrapperSession(
+    sess, "/cns/is-d/home/somebody/tfdbg_dumps_1/", watch_fn=my_watch_fn)
+```
+
+`watch_fn=my_watch_fn` is a `Callable` that allows you to configure what
+`Tensor`s to watch on different `Session.run()` calls, as a function of the
+`fetches` and `feed_dict` to the `run()` call and other states. See
+[the API doc of DumpingDebugWrapperSession](../../api_docs/python/tf_debug.md#DumpingDebugWrapperSession.__init__)
+for more details.
+
 If you model code is written in C++ or other languages, you can also
 modify the `debug_options` field of `RunOptions` to generate debug dumps that
 can be inspected offline. See
@@ -357,7 +353,8 @@ for more details.
        [tfprof](https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/tfprof)
        and other profiling tools for TensorFlow.
 
-**Q**: _How do I link tfdbg against my `Session` in Bazel?_
+**Q**: _How do I link tfdbg against my `Session` in Bazel? Why do I see an
+       error such as "ImportError: cannot import name debug"?_
 
 **A**: In your BUILD rule, declare dependencies:
        `"//tensorflow:tensorflow_py"` and `"//tensorflow/python/debug:debug_py"`.
@@ -381,11 +378,11 @@ sess = tf_debug.LocalCLIDebugWrapperSession(sess)
 ```none
 # Debugging shape mismatch during matrix multiplication.
 python $(python -c "import tensorflow as tf; import os; print(os.path.dirname(tf.__file__));")/python/debug/examples/debug_errors.py \
-    -error shape_mismatch --debug
+    --error shape_mismatch --debug
 
 # Debugging uninitialized variable.
 python $(python -c "import tensorflow as tf; import os; print(os.path.dirname(tf.__file__));")/python/debug/examples/debug_errors.py \
-    -error uninitialized_variable --debug
+    --error uninitialized_variable --debug
 ```
 
 **Q**: _Why can't I select text in the tfdbg CLI?_

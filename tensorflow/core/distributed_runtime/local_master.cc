@@ -84,8 +84,8 @@ Status LocalMaster::PartialRunSetup(CallOptions* call_options,
 }
 
 Status LocalMaster::RunStep(CallOptions* call_options,
-                            const RunStepRequest* request,
-                            RunStepResponse* response) {
+                            RunStepRequestWrapper* request,
+                            MutableRunStepResponseWrapper* response) {
   Notification n;
   Status ret;
   master_impl_->RunStep(call_options, request, response,
@@ -95,6 +95,14 @@ Status LocalMaster::RunStep(CallOptions* call_options,
                         });
   TF_RETURN_IF_ERROR(WaitForNotification(call_options, &n));
   return ret;
+}
+
+MutableRunStepRequestWrapper* LocalMaster::CreateRunStepRequest() {
+  return new InMemoryRunStepRequest;
+}
+
+MutableRunStepResponseWrapper* LocalMaster::CreateRunStepResponse() {
+  return new InMemoryRunStepResponse;
 }
 
 Status LocalMaster::CloseSession(CallOptions* call_options,

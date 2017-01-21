@@ -213,11 +213,18 @@ class GrpcWorkerService : public AsyncServiceInterface {
   void RunGraphHandler(WorkerCall<RunGraphRequest, RunGraphResponse>* call) {
     Schedule([this, call]() {
       CallOptions* call_opts = new CallOptions;
+      ProtoRunGraphRequest* wrapped_request =
+          new ProtoRunGraphRequest(&call->request);
+      NonOwnedProtoRunGraphResponse* wrapped_response =
+          new NonOwnedProtoRunGraphResponse(&call->response);
       call->SetCancelCallback([call_opts]() { call_opts->StartCancel(); });
-      worker_->RunGraphAsync(call_opts, &call->request, &call->response,
-                             [call, call_opts](const Status& s) {
+      worker_->RunGraphAsync(call_opts, wrapped_request, wrapped_response,
+                             [call, call_opts, wrapped_request,
+                              wrapped_response](const Status& s) {
                                call->ClearCancelCallback();
                                delete call_opts;
+                               delete wrapped_request;
+                               delete wrapped_response;
                                call->SendResponse(ToGrpcStatus(s));
                              });
     });

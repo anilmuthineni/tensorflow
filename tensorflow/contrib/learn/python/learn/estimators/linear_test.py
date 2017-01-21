@@ -31,6 +31,7 @@ if hasattr(sys, 'getdlopenflags') and hasattr(sys, 'setdlopenflags'):
 import numpy as np
 
 from tensorflow.contrib.layers.python.layers import feature_column as feature_column_lib
+from tensorflow.contrib.learn.python.learn import experiment
 from tensorflow.contrib.learn.python.learn.datasets import base
 from tensorflow.contrib.learn.python.learn.estimators import _sklearn
 from tensorflow.contrib.learn.python.learn.estimators import estimator
@@ -61,6 +62,19 @@ def _prepare_iris_data_for_logistic_regression():
 
 
 class LinearClassifierTest(test.TestCase):
+
+  def testExperimentIntegration(self):
+    cont_features = [
+        feature_column_lib.real_valued_column(
+            'feature', dimension=4)
+    ]
+
+    exp = experiment.Experiment(
+        estimator=linear.LinearClassifier(
+            n_classes=3, feature_columns=cont_features),
+        train_input_fn=test_data.iris_input_multiclass_fn,
+        eval_input_fn=test_data.iris_input_multiclass_fn)
+    exp.test()
 
   def testEstimatorContract(self):
     estimator_test_utils.assert_estimator_contract(self,
@@ -317,7 +331,8 @@ class LinearClassifierTest(test.TestCase):
         set(['loss', 'my_accuracy', 'my_precision', 'my_metric']).issubset(
             set(scores.keys())))
     predict_input_fn = functools.partial(_input_fn, num_epochs=1)
-    predictions = np.array(list(classifier.predict(input_fn=predict_input_fn)))
+    predictions = np.array(list(classifier.predict_classes(
+        input_fn=predict_input_fn)))
     self.assertEqual(
         _sklearn.accuracy_score([1, 0, 0, 0], predictions),
         scores['my_accuracy'])
@@ -440,7 +455,7 @@ class LinearClassifierTest(test.TestCase):
     classifier.fit(input_fn=input_fn, steps=30)
     predict_input_fn = functools.partial(input_fn, num_epochs=1)
     out1_class = list(
-        classifier.predict(
+        classifier.predict_classes(
             input_fn=predict_input_fn, as_iterable=True))
     out1_proba = list(
         classifier.predict_proba(
@@ -450,7 +465,7 @@ class LinearClassifierTest(test.TestCase):
     classifier2 = linear.LinearClassifier(
         model_dir=model_dir, feature_columns=[age, language])
     out2_class = list(
-        classifier2.predict(
+        classifier2.predict_classes(
             input_fn=predict_input_fn, as_iterable=True))
     out2_proba = list(
         classifier2.predict_proba(
@@ -878,6 +893,18 @@ class LinearClassifierTest(test.TestCase):
 
 class LinearRegressorTest(test.TestCase):
 
+  def testExperimentIntegration(self):
+    cont_features = [
+        feature_column_lib.real_valued_column(
+            'feature', dimension=4)
+    ]
+
+    exp = experiment.Experiment(
+        estimator=linear.LinearRegressor(feature_columns=cont_features),
+        train_input_fn=test_data.iris_input_logistic_fn,
+        eval_input_fn=test_data.iris_input_logistic_fn)
+    exp.test()
+
   def testEstimatorContract(self):
     estimator_test_utils.assert_estimator_contract(self, linear.LinearRegressor)
 
@@ -1076,8 +1103,11 @@ class LinearRegressorTest(test.TestCase):
 
     scores = regressor.evaluate(input_fn=_input_fn, steps=1)
     self.assertLess(scores['loss'], 0.1)
+    predicted_scores = regressor.predict_scores(
+        input_fn=_input_fn, as_iterable=False)
+    self.assertAllClose(labels, predicted_scores, atol=0.1)
     predictions = regressor.predict(input_fn=_input_fn, as_iterable=False)
-    self.assertAllClose(labels, predictions, atol=0.1)
+    self.assertAllClose(predicted_scores, predictions)
 
   def testPredict_AsIterable(self):
     """Tests predict method with as_iterable=True."""
@@ -1112,10 +1142,14 @@ class LinearRegressorTest(test.TestCase):
     scores = regressor.evaluate(input_fn=_input_fn, steps=1)
     self.assertLess(scores['loss'], 0.1)
     predict_input_fn = functools.partial(_input_fn, num_epochs=1)
+    predicted_scores = list(
+        regressor.predict_scores(
+            input_fn=predict_input_fn, as_iterable=True))
+    self.assertAllClose(labels, predicted_scores, atol=0.1)
     predictions = list(
         regressor.predict(
             input_fn=predict_input_fn, as_iterable=True))
-    self.assertAllClose(labels, predictions, atol=0.1)
+    self.assertAllClose(predicted_scores, predictions)
 
   def testCustomMetrics(self):
     """Tests custom evaluation metrics."""
@@ -1156,7 +1190,8 @@ class LinearRegressorTest(test.TestCase):
     self.assertIn('my_error', set(scores.keys()))
     self.assertIn('my_metric', set(scores.keys()))
     predict_input_fn = functools.partial(_input_fn, num_epochs=1)
-    predictions = np.array(list(regressor.predict(input_fn=predict_input_fn)))
+    predictions = np.array(list(
+        regressor.predict_scores(input_fn=predict_input_fn)))
     self.assertAlmostEqual(
         _sklearn.mean_squared_error(np.array([1, 0, 0, 0]), predictions),
         scores['my_error'])
@@ -1225,12 +1260,12 @@ class LinearRegressorTest(test.TestCase):
 
     regressor.fit(input_fn=_input_fn, steps=100)
     predict_input_fn = functools.partial(_input_fn, num_epochs=1)
-    predictions = list(regressor.predict(input_fn=predict_input_fn))
+    predictions = list(regressor.predict_scores(input_fn=predict_input_fn))
     del regressor
 
     regressor2 = linear.LinearRegressor(
         model_dir=model_dir, feature_columns=feature_columns)
-    predictions2 = list(regressor2.predict(input_fn=predict_input_fn))
+    predictions2 = list(regressor2.predict_scores(input_fn=predict_input_fn))
     self.assertAllClose(predictions, predictions2)
 
   def testTrainWithPartitionedVariables(self):

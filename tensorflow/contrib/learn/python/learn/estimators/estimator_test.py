@@ -38,6 +38,7 @@ from tensorflow.contrib import learn
 from tensorflow.contrib.framework.python.ops import variables
 from tensorflow.contrib.layers.python.layers import feature_column as feature_column_lib
 from tensorflow.contrib.layers.python.layers import optimizers
+from tensorflow.contrib.learn.python.learn import experiment
 from tensorflow.contrib.learn.python.learn import metric_spec
 from tensorflow.contrib.learn.python.learn import models
 from tensorflow.contrib.learn.python.learn import monitors as monitors_lib
@@ -122,7 +123,7 @@ def boston_eval_fn():
       constant_op.constant(boston.data), [n_examples, _BOSTON_INPUT_DIM])
   labels = array_ops.reshape(
       constant_op.constant(boston.target), [n_examples, 1])
-  return array_ops.concat_v2([features, features], 0), array_ops.concat_v2(
+  return array_ops.concat([features, features], 0), array_ops.concat(
       [labels, labels], 0)
 
 
@@ -210,12 +211,12 @@ def _build_estimator_for_export_tests(tmpdir):
 
   feature_spec = feature_column_lib.create_feature_spec_for_parsing(
       feature_columns)
-  export_input_fn = input_fn_utils.build_parsing_serving_input_fn(feature_spec)
+  serving_input_fn = input_fn_utils.build_parsing_serving_input_fn(feature_spec)
 
   # hack in an op that uses an asset, in order to test asset export.
   # this is not actually valid, of course.
-  def export_input_fn_with_asset():
-    features, labels, inputs = export_input_fn()
+  def serving_input_fn_with_asset():
+    features, labels, inputs = serving_input_fn()
 
     vocab_file_name = os.path.join(tmpdir, 'my_vocab_file')
     vocab_file = gfile.GFile(vocab_file_name, mode='w')
@@ -228,7 +229,7 @@ def _build_estimator_for_export_tests(tmpdir):
 
     return input_fn_utils.InputFnOps(features, labels, inputs)
 
-  return est, export_input_fn_with_asset
+  return est, serving_input_fn_with_asset
 
 
 class CheckCallsMonitor(monitors_lib.BaseMonitor):
@@ -258,6 +259,13 @@ class CheckCallsMonitor(monitors_lib.BaseMonitor):
 
 class EstimatorTest(test.TestCase):
 
+  def testExperimentIntegration(self):
+    exp = experiment.Experiment(
+        estimator=estimator.Estimator(model_fn=linear_model_fn),
+        train_input_fn=boston_input_fn,
+        eval_input_fn=boston_input_fn)
+    exp.test()
+
   def testModelFnArgs(self):
     expected_param = {'some_param': 'some_value'}
     expected_config = run_config.RunConfig()
@@ -275,6 +283,22 @@ class EstimatorTest(test.TestCase):
         model_fn=_argument_checker,
         params=expected_param,
         config=expected_config)
+    est.fit(input_fn=boston_input_fn, steps=1)
+
+  def testModelFnWithModelDir(self):
+    expected_param = {'some_param': 'some_value'}
+    expected_model_dir = tempfile.mkdtemp()
+    def _argument_checker(features, labels, mode, params, config=None,
+                          model_dir=None):
+      _, _, _ = features, labels, config
+      self.assertEqual(model_fn.ModeKeys.TRAIN, mode)
+      self.assertEqual(expected_param, params)
+      self.assertEqual(model_dir, expected_model_dir)
+      return constant_op.constant(0.), constant_op.constant(
+          0.), constant_op.constant(0.)
+    est = estimator.Estimator(model_fn=_argument_checker,
+                              params=expected_param,
+                              model_dir=expected_model_dir)
     est.fit(input_fn=boston_input_fn, steps=1)
 
   def testInvalidModelFn_no_train_op(self):
@@ -596,6 +620,16 @@ class EstimatorTest(test.TestCase):
     predictions = list(est.predict(x=iris.data))
     self.assertEqual(len(predictions), iris.target.shape[0])
 
+  def testHooksNotChanged(self):
+    est = estimator.Estimator(model_fn=logistic_model_no_mode_fn)
+    # We pass empty array and expect it to remain empty after calling
+    # fit and evaluate. Requires inside to copy this array if any hooks were
+    # added.
+    my_array = []
+    est.fit(input_fn=iris_input_fn, steps=100, monitors=my_array)
+    _ = est.evaluate(input_fn=iris_input_fn, steps=1, hooks=my_array)
+    self.assertEqual(my_array, [])
+
   def testIrisInputFnLabelsDict(self):
     iris = base.load_iris()
     est = estimator.Estimator(model_fn=logistic_model_no_mode_fn)
@@ -618,9 +652,15 @@ class EstimatorTest(test.TestCase):
     est = estimator.Estimator(model_fn=logistic_model_no_mode_fn)
     x_iter = itertools.islice(iris.data, 100)
     y_iter = itertools.islice(iris.target, 100)
-    est.fit(x_iter, y_iter, steps=100)
-    _ = est.evaluate(input_fn=iris_input_fn, steps=1)
-    predictions = list(est.predict(x=iris.data))
+    estimator.SKCompat(est).fit(x_iter, y_iter, steps=20)
+    eval_result = est.evaluate(input_fn=iris_input_fn, steps=1)
+    x_iter_eval = itertools.islice(iris.data, 100)
+    y_iter_eval = itertools.islice(iris.target, 100)
+    score_result = estimator.SKCompat(est).score(x_iter_eval, y_iter_eval)
+    print(score_result)
+    self.assertItemsEqual(eval_result.keys(), score_result.keys())
+    self.assertItemsEqual(['global_step', 'loss'], score_result.keys())
+    predictions = estimator.SKCompat(est).predict(x=iris.data)['class']
     self.assertEqual(len(predictions), iris.target.shape[0])
 
   def testIrisIteratorArray(self):
@@ -727,11 +767,27 @@ class EstimatorTest(test.TestCase):
     with self.assertRaises(ValueError):
       est.fit(input_fn=other_input_fn, steps=1)
 
-  def testMonitors(self):
+  def testMonitorsForFit(self):
     est = estimator.Estimator(model_fn=linear_model_fn)
     est.fit(input_fn=boston_input_fn,
             steps=21,
             monitors=[CheckCallsMonitor(expect_calls=21)])
+
+  def testHooksForEvaluate(self):
+    class CheckCallHook(session_run_hook.SessionRunHook):
+
+      def __init__(self):
+        self.run_count = 0
+
+      def after_run(self, run_context, run_values):
+        self.run_count += 1
+
+    est = learn.Estimator(model_fn=linear_model_fn)
+    est.fit(input_fn=boston_input_fn, steps=1)
+    hook = CheckCallHook()
+    est.evaluate(input_fn=boston_eval_fn, steps=3, hooks=[hook])
+
+    self.assertEqual(3, hook.run_count)
 
   def testSummaryWriting(self):
     est = estimator.Estimator(model_fn=linear_model_fn)
@@ -765,7 +821,7 @@ class EstimatorTest(test.TestCase):
 
   def test_export_savedmodel(self):
     tmpdir = tempfile.mkdtemp()
-    est, export_input_fn = _build_estimator_for_export_tests(tmpdir)
+    est, serving_input_fn = _build_estimator_for_export_tests(tmpdir)
 
     extra_file_name = os.path.join(
         compat.as_bytes(tmpdir), compat.as_bytes('my_extra_file'))
@@ -777,7 +833,7 @@ class EstimatorTest(test.TestCase):
     export_dir_base = os.path.join(
         compat.as_bytes(tmpdir), compat.as_bytes('export'))
     export_dir = est.export_savedmodel(
-        export_dir_base, export_input_fn, assets_extra=assets_extra)
+        export_dir_base, serving_input_fn, assets_extra=assets_extra)
 
     self.assertTrue(gfile.Exists(export_dir_base))
     self.assertTrue(gfile.Exists(export_dir))

@@ -31,6 +31,19 @@ from tensorflow.python.training import queue_runner_impl
 from tensorflow.python.training import server_lib
 
 
+_PORTS = set()
+
+
+def _pick_unused_port():
+  """For some reason portpicker returns the same port sometimes."""
+  while True:
+    p = portpicker.pick_unused_port()
+    if p not in _PORTS:
+      break
+  _PORTS.add(p)
+  return p
+
+
 class FeederThread(object):
   # Helper class, wrapping a feeder and making sure it's located on the proper
   # device
@@ -96,7 +109,7 @@ class FeederTest(test.TestCase):
     cluster_dict = {}
     for (k, v) in kargs.items():
       cluster_dict[k] = [
-          'localhost:%d' % portpicker.pick_unused_port() for _ in range(v)
+          'localhost:%d' % _pick_unused_port() for _ in range(v)
       ]
 
     # Launch servers:
@@ -282,7 +295,8 @@ class FeederTest(test.TestCase):
 
         op_types_by_scope_and_device[scope][dev][op.type] += 1
 
-      expected_ops = collections.Counter({'QueueEnqueue': 1, 'FIFOQueue': 1})
+      expected_ops = collections.Counter(
+          {'QueueEnqueueV2': 1, 'FIFOQueueV2': 1})
       expected_enq_devices = [('replica_0', [
           '/job:consumer/replica:0/device:cpu:0',
           '/job:consumer/replica:1/device:cpu:0',
